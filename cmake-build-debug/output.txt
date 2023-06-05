@@ -1,0 +1,12 @@
+        mov     rcx, QWORD PTR [rbp-40]
+        movabs  rdx, 3783947479167000809
+        mov     rax, rcx
+        mul     rdx
+        mov     rax, rdx
+        shr     rax, 25
+        mov     QWORD PTR [rbp-8], rax
+        mov     rax, QWORD PTR [rbp-8]
+        imul    rax, rax, 163577857
+        sub     rcx, rax
+        mov     rdx, rcx
+        mov     QWORD PTR [rbp-8], rdx
