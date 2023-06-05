@@ -134,6 +134,11 @@ public:
         return this->number * rhs.inverse().get();
     }
 
+    ModuloWrapper operator- () const
+    {
+        return ModuloWrapper(-this->number);
+    }
+
     ModuloWrapper& operator +=(const ModuloWrapper& rhs)
     {
         this->number = Modulo(this->number + rhs.number);
@@ -198,6 +203,7 @@ public:
 namespace FFT
 {
     const double PI = acos(-1);
+    const int threshold = 200;
 
     long long ntt_primitive_root(int p)
     {
@@ -209,7 +215,7 @@ namespace FFT
         return binpow(r, phi >> pw, MOD);
     }
 
-    template <const unsigned int MOD, class T>
+    template <const int MOD, class T>
     void FFT(vector<T> &a, bool invert = false)
     {
         using MW = ModuloWrapper<MOD>;
@@ -282,26 +288,54 @@ namespace FFT
             x *= n_1;
     }
 
-    template <const unsigned int MOD, class T, class U>
-    vector<U> multiply(vector<T> const& a, vector<T> const& b)
+    template<class T>
+    void multiply_slow(vector<T>&a, const vector<T> &b)
+    {
+        if (a.empty() || b.empty())
+        {
+            a.clear();
+            return;
+        }
+
+        int n = a.size();
+        int m = b.size();
+        a.resize(n + m - 1);
+        for (int k = n + m - 2; k >= 0; k--)
+        {
+            a[k] *= b[0];
+            for (int j = max(k - n + 1, 1); j < min(k + 1, m); j++)
+                a[k] += a[k - j] * b[j];
+        }
+    }
+
+    template <const int MOD, class T, class U>
+    vector<U> multiply(const vector<T>& a, const vector<T>& b)
     {
         vector<U> fa(a.begin(), a.end()), fb(b.begin(), b.end());
+
         int n = 1;
-        while (n < a.size() + b.size())
+        while (n < fa.size() + fb.size())
             n <<= 1;
         fa.resize(n);
         fb.resize(n);
+
+        if (n <= threshold)
+        {
+            multiply_slow(fa, fb);
+            return fa;
+        }
 
         FFT<MOD>(fa, false);
         FFT<MOD>(fb, false);
         for (int i = 0; i < n; i++)
             fa[i] *= fb[i];
         FFT<MOD>(fa, true);
-        return std::move(fa);
+
+        return fa;
     }
 
-    template <const unsigned int MOD, class T>
-    vector<T> multiply(vector<T> const& a, vector<T> const& b)
+    template <const int MOD, class T>
+    vector<T> multiply(vector<T>& a, vector<T>& b)
     {
         using MW = ModuloWrapper<MOD>;
         static_assert(
@@ -318,8 +352,7 @@ namespace FFT
             {
                 auto res = multiply<MOD, T, MW>(a, b);
                 vector<T> ans(res.size());
-                for (int i = 0; i < res.size(); ++i)
-                    ans[i] = res[i].get();
+                for (int i = 0; i < res.size(); ++i) ans[i] = res[i].get();
                 return ans;
             }
         }
@@ -337,6 +370,98 @@ namespace FFT
             }
         }
     }
+
+    // 0.48s on cses for n=10^5. 1840ms for same size on codeforces
+    template <const int MOD, class T>
+    void inverse_recursive(vector<T> &a, const int k)
+    {
+        using MW = ModuloWrapper<MOD>;
+        static_assert(
+                (MOD > 0 && is_same<MW, T>::value) ||
+                (MOD == 0 && is_same<cd, T>::value),
+                "MOD must be 0 (for complex double) or must match for modulo wrapper");
+
+        // Step 0: Compute mod x^k
+        a.resize(k);
+
+        if (k == 1)
+        {
+            if constexpr (MOD > 0)
+                a[0] = MW(a[0]).inverse();
+            else
+                a[0] = 1.0 / a[0];
+            return;
+        }
+
+        // Step 1: Find A(-x)
+        auto a_minus = a;
+        for (int i = 1; i < k; i += 2)
+            a_minus[i] *= -1;
+
+        // Step 2: Compute A(x) * A(-x)
+        auto b = multiply<MOD>(a, a_minus);
+
+        // Step 3: Reduce b
+        for (size_t i = 0; 2 * i < b.size(); ++i)
+            b[i] = b[2 * i];
+
+        // Step 4: Compute B^-1(x) mod x^(floor(k/2))
+        inverse_recursive<MOD>(b, (k + 1) >> 1);
+
+        // Step 5: Expand B^-1(x)
+        b.resize(k);
+        for (int i = ((k + 1) >> 1) - 1; i >= 0; --i)
+            b[2 * i] = b[i];
+
+        for (int i = 1; i < k; i += 2)
+            b[i] = 0;
+
+        // Step 6: Multiply A(-x) with B^-1(x)
+        a = multiply<MOD>(a_minus, b);
+        a.resize(k);
+    }
+
+    // 0.42s on cses for n=10^5. 1700 ms for same size on codeforces
+    template <const int MOD, class T>
+    void inverse_iterative(vector<T> &a, int k)
+    {
+        using MW = ModuloWrapper<MOD>;
+        static_assert(
+                (MOD > 0 && is_same<MW, T>::value) ||
+                (MOD == 0 && is_same<cd, T>::value),
+                "MOD must be 0 (for complex double) or must match for modulo wrapper");
+
+        // Step 0: B0 = a0^-1
+        vector<T> b(1);
+
+        if constexpr (MOD > 0)
+            b[0] = MW(a[0]).inverse();
+        else
+            b[0] = 1.0 / a[0];
+
+        int n = 1;
+        while (n < k)
+            n <<= 1;
+
+        k = 1;
+        while (k < n)
+        {
+            // 1. Compute C := A * B mod x^2k
+            // 2. Compute B := B * (2 - C) mod x^2k
+            k <<= 1;
+            auto c = multiply<MOD>(a, b);
+            c.resize(k);
+
+            for (int i = 0; i < k; ++i)
+                c[i] = -c[i];
+            c[0] += 2;
+
+            b = multiply<MOD>(b, c);
+            b.resize(k);
+        }
+
+        a = std::move(b);
+    }
 }
 
 const ll mod = 163577857;
@@ -345,18 +470,10 @@ using vMW = vector<MW>;
 
 int main()
 {
-    FAST_IO;
-    REDIRECT_INPUT;
-    int n, k;
-    cin >> n >> k;
-    vector<MW> arr(1 << 20);
-    for (int i = 0; i < n; ++i)
-    {
-        int x;
-        cin >> x;
-        arr[x] = 1;
-    }
+    vMW d{1,-6,7};
+    FFT::inverse_iterative<mod>(d, 1'000'00 + 4);
 
-    for (auto i : arr)
-        cout << i << " ";
+    vMW prod{1, -4, 3};
+    prod = FFT::multiply<mod>(prod, d);
+    return 0;
 }
